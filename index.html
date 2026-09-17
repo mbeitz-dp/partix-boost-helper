@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>partix boost · Shopware verbinden</title><style>
+:root{font-family:Inter,system-ui,-apple-system,sans-serif;color:#162338;background:#f2f5fa;font-synthesis:none}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:42px 20px}main{max-width:680px;margin:auto}.brand{font-size:24px;font-weight:850;letter-spacing:-1px;margin-bottom:38px}.brand span{color:#6654ed}.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:2px;font-weight:750;color:#6654ed}h1{font-size:clamp(28px,5vw,38px);line-height:1.15;letter-spacing:-1.3px;margin:12px 0}p{color:#667085;line-height:1.65}.card{margin-top:28px;background:#fff;border:1px solid #e2e7ef;border-radius:20px;padding:30px;box-shadow:0 14px 45px #27385a08}.badge{display:inline-block;background:#eeeafd;color:#5945c9;border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700}.summary{display:flex;justify-content:space-between;gap:12px;align-items:center;padding-bottom:22px;border-bottom:1px solid #edf0f5;margin-bottom:24px}label{display:block;font-weight:650;font-size:14px;margin:20px 0 8px}input,textarea{width:100%;padding:14px;border:1px solid #cfd6e2;border-radius:9px;background:#fff;color:#162338;font:inherit}input:focus,textarea:focus{outline:3px solid #ded9ff;border-color:#6654ed}small{display:block;color:#748095;font-size:12px;line-height:1.6;margin-top:8px}button{border:0;border-radius:10px;padding:15px 20px;background:#6654ed;color:white;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}.submit{width:100%;margin-top:25px}.notice{padding:15px 18px;border-radius:10px;line-height:1.6;margin:20px 0;background:#fff2e3;color:#8b4d08}.error{background:#feecec;color:#a22727}.success{background:#e9f8ef;color:#237546}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}.secondary{background:#edf0f7;color:#34435b}textarea{font-family:ui-monospace,monospace;font-size:12px;line-height:1.8;min-height:285px;resize:vertical}.foot{text-align:center;font-size:12px;margin-top:24px}@media(max-width:480px){body{padding:25px 14px}.card{padding:22px}.summary{align-items:flex-start;flex-direction:column}}
+
+[hidden]{display:none!important}.steps{padding:0;list-style:none;color:#667085;font-size:14px;line-height:2}.done{color:#237546}.active{color:#6654ed;font-weight:700}a{color:#5945c9}
+</style></head><body><main>
+<div class="brand">partix <span>boost</span></div><div class="eyebrow">Shopware 6 · API-Verbindung</div><h1>Deinen Shop verbinden.</h1><p>Shop-Adresse und Administratorzugang eingeben. Du erhältst die API-Zugangsdaten für partix boost.</p>
+<div class="notice error" id="error" role="alert" hidden></div>
+<form class="card" id="connect"><div class="summary"><strong>partix boost</strong><span class="badge">Administratorrechte</span></div>
+<label for="url">Shop-URL</label><input id="url" name="url" type="url" placeholder="https://mein-shop.de" required autocomplete="url"><small>Die Shop-Basis-Adresse, auch mit Unterverzeichnis.</small>
+<label for="username">Shopware-Benutzername</label><input id="username" name="username" required autocomplete="username">
+<label for="password">Shopware-Passwort</label><input id="password" name="password" type="password" required autocomplete="current-password">
+<small>Der Benutzer muss Integrationen mit Administratorrechten anlegen dürfen.</small><button class="submit" id="submit" type="submit">API-Integration anlegen →</button><small>Erstellt „partix boost“ mit vollständigen API-Administratorrechten. Bereits vorhandene Integrationen werden nicht geändert.</small>
+</form>
+<ol class="steps" id="steps" aria-live="polite" hidden><li>Anmelden</li><li>Vorhandene Integration prüfen</li><li>API-Integration anlegen</li><li>Zugang und Administratorrechte prüfen</li></ol>
+<section class="card" id="result" hidden><span class="badge" id="badge"></span><h2 id="result-title"></h2><div class="notice" id="result-message" role="status"></div><p>Den Sicherheitsschlüssel jetzt sichern. Shopware gibt ihn später nicht erneut im Klartext aus.</p><label for="credentials">API-Zugangsdaten</label><textarea id="credentials" readonly spellcheck="false"></textarea><div class="actions"><button type="button" id="copy">Zugangsdaten kopieren</button><button type="button" id="download" class="secondary">JSON herunterladen</button></div><small id="copy-status" aria-live="polite"></small></section>
+<p class="foot">Die Verbindung erfolgt direkt zu deinem Shop. Diese Seite speichert keine Zugangsdaten dauerhaft.</p><small>Am besten unter derselben HTTPS-Domain wie Shopware bereitstellen. Bei einer anderen Domain muss der Shop CORS für diese Seite erlauben. Lokal geöffnete Dateien können vom Browser blockiert werden.</small>
+</main><script>
+'use strict';
+const $ = id => document.getElementById(id);
+let busy = false;
+function randomHex(bytes) {
+    return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), b => b.toString(16).padStart(2, '0')).join('');
+}
+function shopUrl(value) {
+    let url;
+    try { url = new URL(value.trim()); } catch { throw new Error('Bitte eine gültige Shop-URL eingeben.'); }
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
+        throw new Error('Bitte eine HTTPS-Shop-URL ohne Zugangsdaten, Parameter oder Fragment eingeben.');
+    }
+    url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/admin$/, '');
+    return url.href.replace(/\/+$/, '');
+}
+async function api(shop, path, body, token) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    try {
+        const headers = {'Content-Type': 'application/json', 'Accept': 'application/json'};
+        if (token) headers.Authorization = 'Bearer ' + token;
+        const response = await fetch(shop + path, {
+            method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal,
+            credentials: 'omit', cache: 'no-store', redirect: 'error', referrerPolicy: 'no-referrer'
+        });
+        if (!response.ok) {
+            const messages = {
+                400: 'Shopware hat die Anfrage abgelehnt. Shopware-Version und Zugangsdaten prüfen.',
+                401: 'Anmeldung abgelehnt. Zugangsdaten prüfen.',
+                403: 'Dem Benutzer fehlen die erforderlichen Administratorrechte.',
+                404: 'API nicht gefunden. Bitte die Shop-Basis-URL prüfen.',
+                429: 'Zu viele Anfragen. Bitte später erneut versuchen.'
+            };
+            throw new Error(messages[response.status] || 'Shopware-Fehler (HTTP ' + response.status + ').');
+        }
+        const raw = await response.text();
+        if (!raw) return {};
+        try { return JSON.parse(raw); } catch { throw new Error('Der Shop hat keine gültige JSON-Antwort geliefert.'); }
+    } catch (error) {
+        if (error.name === 'AbortError') throw new Error('Der Shop hat nicht innerhalb von 30 Sekunden geantwortet.');
+        if (error instanceof TypeError) throw new Error('Verbindung blockiert oder Shop nicht erreichbar. Shop-URL, HTTPS und CORS prüfen. Diese HTML-Datei möglichst unter derselben Domain wie Shopware öffnen.');
+        throw error;
+    } finally { clearTimeout(timeout); }
+}
+function step(index) {
+    $('steps').hidden = false;
+    Array.from($('steps').children).forEach((el, i) => {el.className = i < index ? 'done' : i === index ? 'active' : '';});
+}
+function showResult(data, verified, message) {
+    $('connect').hidden = true;
+    $('result').hidden = false;
+    $('badge').textContent = verified ? 'VERBINDUNG GEPRÜFT' : 'STATUS PRÜFEN';
+    $('result-title').textContent = verified ? 'partix boost ist bereit.' : 'Zugangsdaten vorsorglich sichern.';
+    $('result-message').className = verified ? 'notice success' : 'notice';
+    $('result-message').textContent = message;
+    $('credentials').value = JSON.stringify(data, null, 2);
+}
+$('connect').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (busy) return;
+    busy = true;
+    $('submit').disabled = true;
+    $('submit').textContent = 'Verbindung wird eingerichtet …';
+    $('error').hidden = true;
+    let data = null;
+    try {
+        const shop = shopUrl($('url').value);
+        const username = $('username').value.trim();
+        if (!username) throw new Error('Bitte den Benutzernamen eingeben.');
+        step(0);
+        const body = {grant_type: 'password', client_id: 'administration', scopes: 'write', username, password: $('password').value};
+        $('password').value = '';
+        let auth;
+        try { auth = await api(shop, '/api/oauth/token', body); } finally { body.password = ''; }
+        const token = auth.access_token;
+        if (!token) throw new Error('Shopware hat keinen Zugriffstoken zurückgegeben.');
+        step(1);
+        const existing = await api(shop, '/api/search/integration', {limit: 1, filter: [{type: 'equals', field: 'label', value: 'partix boost'}]}, token);
+        if (!Array.isArray(existing.data)) throw new Error('Vorhandene Integrationen konnten nicht zuverlässig geprüft werden. Es wurde nichts angelegt.');
+        if (existing.data.length) throw new Error('„partix boost“ existiert bereits. Der geheime Schlüssel kann nicht ausgelesen werden. Es wurde nichts geändert.');
+        step(2);
+        data = {shop_url: shop, name: 'partix boost', integration_id: randomHex(16), client_id: 'SWIA' + randomHex(16), client_secret: randomHex(32), admin: true};
+        await api(shop, '/api/integration', {id: data.integration_id, label: data.name, accessKey: data.client_id, secretAccessKey: data.client_secret, admin: true}, token);
+        step(3);
+        const check = await api(shop, '/api/oauth/token', {grant_type: 'client_credentials', client_id: data.client_id, client_secret: data.client_secret});
+        if (!check.access_token) throw new Error('Die Anmeldung mit der neuen Integration konnte nicht bestätigt werden.');
+        const readback = await api(shop, '/api/search/integration', {limit: 1, filter: [{type: 'equals', field: 'id', value: data.integration_id}]}, token);
+        const row = readback.data?.[0];
+        const attributes = row?.attributes ?? row;
+        if (attributes?.label !== data.name || attributes?.admin !== true) throw new Error('Die Administratorrechte konnten nicht bestätigt werden.');
+        step(4);
+        showResult(data, true, 'Integration mit Administratorrechten angelegt. Die Anmeldung mit den neuen API-Zugangsdaten wurde erfolgreich geprüft.');
+    } catch (error) {
+        if (data) {
+            showResult(data, false, error.message + ' Die Anlage ist nicht vollständig bestätigt. Diese Schlüssel vorsorglich sichern und in Shopware unter Einstellungen → System → Integrationen prüfen. Nicht ungeprüft erneut anlegen.');
+        } else {
+            $('error').textContent = error.message;
+            $('error').hidden = false;
+        }
+    } finally {
+        busy = false;
+        $('password').value = '';
+        $('submit').disabled = false;
+        $('submit').textContent = 'API-Integration anlegen →';
+    }
+});
+$('copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('credentials').value); $('copy-status').textContent = 'Zugangsdaten kopiert.'; }
+    catch { $('credentials').focus(); $('credentials').select(); $('copy-status').textContent = 'Bitte die markierten Zugangsdaten manuell kopieren.'; }
+});
+$('download').addEventListener('click', () => {
+    const blob = new Blob([$('credentials').value], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = 'partix-boost-zugangsdaten.json';
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+window.addEventListener('beforeunload', event => { if (busy) { event.preventDefault(); event.returnValue = ''; } });
+</script></body></html>
